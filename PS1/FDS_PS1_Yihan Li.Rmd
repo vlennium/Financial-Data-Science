@@ -1,0 +1,356 @@
+---
+title: "Financial Data Science_PS1"
+author: "Yihan Li"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(lubridate)
+rm(list=ls())
+```
+
+## Question 1
+
+The longest available data is from 1927/12/30 on Bloomberg and I have extracted the dataset from 1927/12/30 to 2023/8/31. Nevertheless, the dataset is not complete. I found that data before 1982/4/21 are the same for open, high, low and last, so I trimmed the data to range from 1982/4/21 to 2023/8/31.
+
+### 1a
+```{r}
+SP_500 <- read.csv("S&P 500.csv", header = TRUE)
+
+# convert calendar date into date type
+SP_500 <- SP_500 %>%
+  mutate(date = as.Date(Dates))
+
+head(SP_500)
+```
+```{r}
+# check the number of duplicated rows in dataframe
+sum(ifelse(SP_500$PX_OPEN == SP_500$PX_HIGH &
+           SP_500$PX_OPEN == SP_500$PX_LOW &
+           SP_500$PX_OPEN == SP_500$PX_LAST,1,0))
+```
+
+```{r}
+# filter out dates with duplicated data
+SP_500_new <- SP_500[13604:nrow(SP_500), ]
+```
+
+### 1b 
+Data Wrangling & Integrity Checks
+```{r}
+
+SP_500_new <- SP_500_new %>%
+  na_if("") %>% # check for missing data, convert missing data to NA
+  drop_na() # drop NA values
+
+# check if the high value is greater than low value
+highlow <- SP_500_new$PX_HIGH >= SP_500_new$PX_LOW
+length(highlow[highlow==FALSE])
+
+```
+
+In the previous part 1a), I found that the dataframe is not complete and corrected the dataframe to include only complete values. In part 1b), I further investigate the blankness and accurancy of the dataframe, determined by the criteria (high > low)
+
+### 1c
+```{r}
+probability_openhigh_equal <- sum(ifelse(SP_500_new$PX_OPEN == SP_500_new$PX_HIGH, 1, 0)) / nrow(SP_500_new)
+```
+
+The probability is 11.064%
+
+Methodology: find the number of days when open price equals to high price. Divide the days by the total number of days in the dataframe. 
+
+Assumption: high price equals open price if the stock market performs badly on a given day. In other words, the stock prices will never exceed the open price in a day. We should expect Prob(open=high) to be low as the stock market (S&P) had been growing in the past 40 years. 
+
+Testing Random Walk Hypothesis Intraday: cannot be used to test for Random Walk Hypothesis. If the highest value of S&P 500 occurs at the opening of a day, it means that during that day S&P 500 will decrease in value as long as the market opens, and fluctuates below the opening price. One plausible explanation is that market has sentiment and herd effect exists. If S&P 500 continues to drop intraday, it is like that investors are selling out their assets in the market that further drive down the prices. On the other hand, if random walk is true, we should expect the stock price to move in random directions and independent of past performance and sentiment in a day. 
+
+### 1d
+```{r}
+# create a dataset ranging from 1982/4/21 to 2011/8/31 because data before 1982/4/21 have no intraday movement
+
+SP_500_intraday <- SP_500_new[SP_500_new$Dates <= "2011-8-31", ] %>%
+  mutate(range = (PX_HIGH - PX_LOW)/PX_LOW)
+
+SP_500_intraday_top20 <- SP_500_intraday %>%
+  arrange(desc(range)) %>%
+  slice(1:20) %>%
+  arrange(date) %>%
+  mutate(last_3yr = ifelse(
+    date >="2008-9-1" & date <= "2011-8-31",1,0)) 
+
+sum(SP_500_intraday_top20$last_3yr)
+```
+
+15 days took place between 2008/9/1 and 2011/8/31
+
+### 1e
+```{r}
+
+SP_500_open <- SP_500_intraday %>%
+  select("date","PX_OPEN")
+
+SP_500_close_before <- SP_500_intraday[1:nrow(SP_500_intraday)-1,] %>%
+  select("PX_LAST")
+
+SP_500_close_before <- rbind(NA, SP_500_close_before)
+
+SP_500_overnight <- cbind(SP_500_open,SP_500_close_before) %>%
+  mutate(overnight = (PX_OPEN - PX_LAST) / PX_LAST) %>%
+  mutate(year = as.numeric(format(date,'%Y'))) 
+
+top20_negative <- SP_500_overnight %>%
+  arrange(overnight) %>%
+  slice(1:20) %>%
+  arrange(date) %>%
+  group_by(year) %>%
+  count()
+
+top20_positive <- SP_500_overnight %>%
+  arrange(desc(overnight)) %>%
+  slice(1:20) %>%
+  arrange(date) %>%
+  group_by(year) %>%
+  count()
+
+top20_negative
+top20_positive
+```
+Most negative cases occur between 2008-2010 and most positive cases occur between 1982-1984
+
+### 1f
+```{r}
+# one-day jump j_t = r_t / sigma_t
+# r_t = log(p_t/p_(t-1))
+# sigma_t = SD of returns 30 days prior to the start of day t
+
+SP_500_log_return <- SP_500_new %>%
+  select("date","PX_LAST") 
+
+SP_close_prev <- SP_500_new[1:nrow(SP_500_new)-1,] %>%
+  select("PX_LAST")
+
+SP_close_prev <- rbind(NA,SP_close_prev)
+
+SP_500_log_return <- cbind(SP_500_log_return, SP_close_prev)
+names(SP_500_log_return)[3] <- "PX_PREV"
+SP_500_log_return$return_log = log(SP_500_log_return$PX_LAST/SP_500_log_return$PX_PREV)
+SP_500_log_return$sigmat <- NA
+
+for (i in 32:nrow(SP_500_log_return)){
+  sigma <- sd(as.numeric(unlist(SP_500_log_return$return_log))[(i-30):(i-1)])
+  SP_500_log_return$sigmat[i] <- sigma
+}
+
+SP_500_log_return$jt <- SP_500_log_return$return_log / SP_500_log_return$sigmat
+
+SP_500_log_return$abs_jt <- abs(SP_500_log_return$jt)
+
+SP_500_log_return %>%
+  arrange(desc(abs_jt)) %>%
+  slice(1:20)
+```
+
+Based on the analysis, 1 data fall between the range from 2008/8/31 to 2011/8/31, and this date is 2011-08-08
+
+### 1g
+
+I have picked the following periods as comparison with the pandemic year 2020. Since the article was wrote in 2011, I have combined the impact of global financial crisis and the "swings since the start of 2010" into one period. 
+
+1980-1990: price fluctuations of 1% or more is common
+1990-2000: relative calm period 
+2000-2007: automated trading strategy, introduction of ETF
+2008-2011: global financial crisis and aftermath
+2020: global pandemic COVID-19
+
+```{r}
+SP_500_new_2020 <- SP_500_new %>%
+  filter(date >= "2020-01-01" & date <= "2020-12-31") %>%
+  mutate(range = PX_HIGH - PX_LOW) %>%
+  mutate(fluc = (PX_HIGH - PX_LOW)/PX_LOW)
+
+SP_500_new_2020$PX_PREV <- append(NA,SP_500_new_2020$PX_LAST[1:nrow(SP_500_new_2020)-1])
+SP_500_new_2020$abs_overnight <- abs((SP_500_new_2020$PX_OPEN - SP_500_new_2020$PX_PREV) / (SP_500_new_2020$PX_PREV))
+
+SP_500_new_80s <- SP_500_new %>%
+  filter(date >= "1980-01-01" & date <= "1989-12-31") %>%
+  mutate(range = PX_HIGH - PX_LOW) %>%
+  mutate(fluc = (PX_HIGH - PX_LOW)/PX_LOW)
+
+SP_500_new_80s$PX_PREV <- append(NA,SP_500_new_80s$PX_LAST[1:nrow(SP_500_new_80s)-1])
+SP_500_new_80s$abs_overnight <- abs((SP_500_new_80s$PX_OPEN - SP_500_new_80s$PX_PREV) / (SP_500_new_80s$PX_PREV))
+
+SP_500_new_90s <- SP_500_new %>%
+  filter(date >= "1990-01-01" & date <= "1999-12-31") %>%
+  mutate(range = PX_HIGH - PX_LOW) %>%
+  mutate(fluc = (PX_HIGH - PX_LOW)/PX_LOW)
+
+SP_500_new_90s$PX_PREV <- append(NA,SP_500_new_90s$PX_LAST[1:nrow(SP_500_new_90s)-1])
+SP_500_new_90s$abs_overnight <- abs((SP_500_new_90s$PX_OPEN - SP_500_new_90s$PX_PREV) / (SP_500_new_90s$PX_PREV))
+
+SP_500_new_00s <- SP_500_new %>%
+  filter(date >= "2000-01-01" & date <= "2007-12-31") %>%
+  mutate(range = PX_HIGH - PX_LOW) %>%
+  mutate(fluc = (PX_HIGH - PX_LOW)/PX_LOW)
+
+SP_500_new_00s$PX_PREV <- append(NA,SP_500_new_00s$PX_LAST[1:nrow(SP_500_new_00s)-1])
+SP_500_new_00s$abs_overnight <- abs((SP_500_new_00s$PX_OPEN - SP_500_new_00s$PX_PREV) / (SP_500_new_00s$PX_PREV))
+
+SP_500_new_2010 <- SP_500_new %>%
+  filter(date >= "2008-01-01" & date <= "2011-12-31") %>%
+  mutate(range = PX_HIGH - PX_LOW) %>%
+  mutate(fluc = (PX_HIGH - PX_LOW)/PX_LOW)
+
+SP_500_new_2010$PX_PREV <- append(NA,SP_500_new_2010$PX_LAST[1:nrow(SP_500_new_2010)-1])
+SP_500_new_2010$abs_overnight <- abs((SP_500_new_2010$PX_OPEN - SP_500_new_2010$PX_PREV) / (SP_500_new_2010$PX_PREV))
+```
+
+```{r}
+SP_500_new_2020 <- SP_500_new_2020%>% 
+  drop_na()
+
+col1 <- c('Period', 'Average Intra-day Range', 'Average Intra-day Fluctuation', 'Average Overnight Change')
+
+col2 <- c('2020', 
+          mean(SP_500_new_2020$range), 
+          mean(SP_500_new_2020$fluc),
+          mean(SP_500_new_2020$abs_overnight))
+
+SP_500_new_80s <- SP_500_new_80s%>% 
+  drop_na()
+col3 <- c('1980s', 
+          mean(SP_500_new_80s$range), 
+          mean(SP_500_new_80s$fluc),
+          mean(SP_500_new_80s$abs_overnight))
+
+SP_500_new_90s <- SP_500_new_90s%>% 
+  drop_na()
+col4 <- c('1990s', 
+          mean(SP_500_new_90s$range), 
+          mean(SP_500_new_90s$fluc),
+          mean(SP_500_new_90s$abs_overnight))
+
+SP_500_new_00s <- SP_500_new_00s%>% 
+  drop_na()
+col5 <- c('2000s', 
+          mean(SP_500_new_00s$range), 
+          mean(SP_500_new_00s$fluc),
+          mean(SP_500_new_00s$abs_overnight))
+
+SP_500_new_2010 <- SP_500_new_2010%>% 
+  drop_na()
+col6 <- c('2008-2011', 
+          mean(SP_500_new_2010$range), 
+          mean(SP_500_new_2010$fluc),
+          mean(SP_500_new_2010$abs_overnight))
+
+data_volatility <- data.frame(col1,col2,col3,col4,col5,col6); data_volatility
+```
+
+I have used three metrics to evaluate the volatility of S&P 500 in five periods. The first one is the average intra-day range in a period, which measures the difference between high and low price of S&P 500. By looking into the chart, we can see the year 2020 has witnessed the largest value for this metric, followed by the 2008-2011 Global Financial Crisis period. The second term I adopted is the average intra-day fluctuation that calculate the percentage change from low to high price in a period. The data cohort of 2008-2011 has the biggest percent change of 1.96%, while 2020 comes as the second largest at 1.73%. Lastly, I use the overnight change to reflect the overnight change in stock price, and 2020 data has the largest overnight change of 0.692%.     
+
+
+## Question 2
+
+### 2
+Investigating the reasons behind conflicting results for S&P 500 OHLC data
+```{r}
+SP_500_19821006 <- SP_500_new %>%
+  filter(date == "1982-10-06")
+
+SP_500_19821006
+```
+On Yahoo finance, the data is given by:
+OPEN: 122
+HIGH: 125.97
+LOW: 122
+LAST: 125.97
+
+While open and low prices are the same, high and low prices are off by 1. Even though the amount is not large, this discrepancy still carries significant implications because this could create arbitrage opportunity, and yield massive financial gains/losses if under leverage. There are two ways we can use to resolve the discrepancy. First, resort to other data vendors' data and determine which number come up more often. This includes not only electronic data vendors, but also data sources on newspaper or publications by the stock exchanges. Moreover, root back to the logistics of the data formation and check if the methods different data vendors use are different. Use the most reliable one.    
+
+I believe Bloomberg's data are more accurate. This is because Bloomberg is a paid terminal that provides analytical and quantitative service to largely institutional clients, whereas Yahoo Finance is a free resource that target individual users. Therefore, Bloomberg's data are more credible as they will affect how institutional traders make trading decisions, and will bear the risk of lawsuits if the data are inaccurate. On the other hand, Yahoo Finance shoulders no legal liability as it is free, and will not impact the market business as much as Bloomberg. 
+
+
+## Question 3
+
+On August 24, 2020, Salesforce.com (CRM) will replace Exxon Mobil, Amgen (AMGN) will replace Pfizer and Honeywell International (HON) will replace Raytheon Technologies. I have extracted the closing price of the components of Dow Jones from 2020/8/3 to 2020/8/31
+
+```{r}
+dow_jones <- read.csv("Dow Jones.csv", header = TRUE)
+head(dow_jones)
+
+dow_jones <- dow_jones %>%
+  mutate(date = as.Date(Dates))
+```
+### 3a
+```{r}
+dow_jones_old <- dow_jones[,1:32]
+dow_jones_old$marketcap <- rowSums(dow_jones_old[, 3:32])
+dow_jones_old$index <-  dow_jones_old$marketcap / dow_jones_old$INDU.Index
+dow_jones_old$index[16:21]
+
+dow_jones_new <- cbind(dow_jones[,1:29], dow_jones[33:35])
+dow_jones_new$marketcap <- rowSums(dow_jones_new[, 3:32])
+dow_jones_new$index <-  dow_jones_new$marketcap / dow_jones_new$INDU.Index
+dow_jones_new$index[16:21]
+
+```
+
+If the changes were made at the market close on the announcement date, the index divisor would have increased from 0.1321 to 0.1494 on August 25, 2020, the first effective trading day. The upshift of index divisor is not wanted as we wish to maintain a steady and stable index divisor at all time to avoid market fluctuations.
+
+### 3b
+```{r}
+dow_jones_old_0824 <- dow_jones_old[16,]
+prop_old_departing = (dow_jones_old_0824$XOM.US.Equity + dow_jones_old_0824$PFE.US.Equity + dow_jones_old_0824$RTX.US.Equity)/ dow_jones_old_0824$marketcap
+
+prop_old_departing
+prop_old_remaining <- 1-prop_old_departing; prop_old_remaining
+```
+
+The departing companies make up for 3.769% of total index; the remaining 27 companies account for 96.23% of index.
+
+### 3c
+```{r}
+dow_jones_new_0824 <- dow_jones_new[16,]
+prop_new = (dow_jones_new_0824$CRM.US.Equity + dow_jones_new_0824$AMGN.US.Equity + dow_jones_new_0824$HON.US.Equity) / dow_jones_new_0824$marketcap
+
+prop_new
+prop_new_remaining <- 1-prop_new; prop_new_remaining
+```
+
+The newly introduced companies make up for 14.36% of total index; 27 remaining companies account for 85.63%, lesser total weight than previous value 
+
+### 3d
+```{r}
+dow_jones_noamgn <- cbind(dow_jones_new[,1:30],dow_jones_new$HON.US.Equity)
+dow_jones_amzn <- cbind(dow_jones_noamgn,dow_jones$AMZN.US.Equity)
+
+dow_jones_amzn$marketcap <- rowSums(dow_jones_amzn[, 3:32])
+dow_jones_amzn$index <-  dow_jones_amzn$marketcap / dow_jones_old$INDU.Index
+
+amzn_divisor <- dow_jones_amzn$index[16]; amzn_divisor
+  
+dow_jones_bh <- cbind(dow_jones_noamgn,dow_jones$BRK.A.US.Equity)
+dow_jones_bh$marketcap <- rowSums(dow_jones_bh[, 3:32])
+dow_jones_bh$index <-  dow_jones_bh$marketcap / dow_jones_bh$INDU.Index
+
+bh_divisor <- dow_jones_bh$index[16]; bh_divisor
+```
+
+The divisor for amazon is 0.146 and the divisor for Berkshire Hathaway is 11.4
+
+### 3e
+```{r}
+dow_jones[21,]
+```
+
+By definition, a stock split does not change the shareholders' equity of a company. However, to the number of outstanding shares will increase n times while the share price will become 1/n of the original stock price. Apple experienced a 4-for-1 stock split that took effect on August 31, 2020 for shareholders of record on August 24, and may have the following impact on DJIA:
+
+i. price adjustment: under apple's 4-for-1 stock split, shareholders would receive four shares for every unit share they previously held, and the stock price of apple per share would be 1/4. This price adjustment can affect the apple's performance on DJIA, as stock with higher prices will have a greater impact on the index
+
+ii. maintaining continuity: apple's stock split doesn't change its weight much in the DJIA, as the latter is adjusted for such activities, but to ensure continuity in the DJIA, the Dow Jones Company may adjust the divisor of the index to compensate for stock splits. Meanwhile, the replacement of companies in DJIA from August 24 to August 31 will also adjust the divisor to ensure continuity. The overlapping of both events contribute to the minimalization of fluctuations in the market. 
+
