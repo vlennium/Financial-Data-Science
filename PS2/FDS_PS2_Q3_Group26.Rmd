@@ -1,0 +1,185 @@
+---
+title: "FDS_PS2_Q3_Group26"
+author: "Group26"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r}
+rm(list=ls())
+library(tidyverse)
+library(ggplot2)
+```
+
+```{r}
+# load the data
+data <- read.csv("projectB.csv")
+# Convert 'tradedate' to Date type for proper sorting
+data$tradedate <- as.Date(data$tradedate, format = "%m/%d/%Y")
+# Sort by 'tradedate' in ascending order
+data_sorted <- data %>%
+  arrange(tradedate)
+
+# 1(a)
+# Calculate the market index return for each date
+market_index <- data_sorted %>%
+  group_by(tradedate) %>%
+  summarise(market_index = mean(return, na.rm = TRUE))
+
+# Print the sorted data
+print(market_index)
+
+# Merge the market index return with the original data
+merged_data <- merge(data_sorted, market_index, by = "tradedate")
+
+# Calculate excess return for each stock and each date
+merged_data <- merged_data %>%
+  mutate(excess_return = return - market_index)
+
+# Calculate the weights for each stock at the end of each period
+merged_data <- merged_data %>%
+  group_by(tradedate) %>%
+  mutate(weight = - excess_return / 690)
+
+# Calculate the sum of weights
+sum_of_weights <- sum(merged_data$weight)
+
+# Check if the sum of weights is approximately zero
+is_sum_zero <- near(sum_of_weights, 0)
+
+# Print the result
+print(is_sum_zero)
+
+# Calculate weighted returns for each stock on each day
+merged_data <- merged_data %>%
+  group_by(id) %>%
+  mutate(weighted_return = lag(weight) * return)
+
+head(merged_data)
+
+# Sum the weighted returns to get the portfolio return for each day
+portfolio_returns <- merged_data %>%
+  group_by(tradedate) %>%
+  summarise(portfolio_return = sum(weighted_return))
+
+# Plot the time series of daily portfolio returns
+ggplot(portfolio_returns, aes(x = tradedate, y = portfolio_return)) +
+  geom_line() +
+  labs(title = "Time Series of Daily Portfolio Returns",
+       x = "Date",
+       y = "Portfolio Return")
+
+# plot the time series of daily market returns
+ggplot(market_index, aes(x = tradedate, y = market_index)) +
+  geom_line() +
+  labs(title = "Time Series of Market Index",
+       x = "Date",
+       y = "Market Index")
+
+# Combine the two data frames
+combined_data <- merge(portfolio_returns, market_index, by = "tradedate")
+head(combined_data)
+
+# Remove rows with missing values
+combined_data <- na.omit(combined_data)
+
+# Plot the time series of daily portfolio and market returns
+ggplot(combined_data, aes(x = tradedate)) +
+  geom_line(aes(y = market_index, color = "Market Index")) +
+  geom_line(aes(y = portfolio_return, color = "Portfolio Return")) +
+  labs(title = "Time Series of Daily Portfolio and Market Returns",
+       x = "Date",
+       y = "Return") +
+  scale_color_manual(values = c("Portfolio Return" = "blue", "Market Index" = "red")) +
+  theme_minimal()
+
+
+# (b)
+# Remove rows with missing values
+portfolio_returns <- na.omit(portfolio_returns)
+# Calculate strategy metrics
+strategy_annualized_mean_return <- mean(portfolio_returns$portfolio_return) * 252
+strategy_volatility <- sd(portfolio_returns$portfolio_return) * sqrt(252)
+strategy_sharpe_ratio <- strategy_annualized_mean_return / strategy_volatility
+
+# Calculate market metrics
+market_annualized_mean_return <- mean(market_index$market_index) * 252
+market_volatility <- sd(market_index$market_index) * sqrt(252)
+market_sharpe_ratio <- market_annualized_mean_return / market_volatility
+
+# Print the metrics
+cat("Strategy Metrics:\n")
+cat("Annualized Mean Return (%):", strategy_annualized_mean_return*100, "\n")
+cat("Volatility (%):", strategy_volatility*100, "\n")
+cat("Sharpe Ratio:", strategy_sharpe_ratio, "\n\n")
+
+cat("Market Metrics:\n")
+cat("Annualized Mean Return (%):", market_annualized_mean_return*100, "\n")
+cat("Volatility (%):", market_volatility*100, "\n")
+cat("Sharpe Ratio:", market_sharpe_ratio, "\n")
+```
+
+```{r}
+# Q3
+# Calculate the top x% and bottom y% quantiles based on lagged excess return
+x_percentile <- 0.1  # adjust as needed
+y_percentile <- 0.1  # adjust as needed
+
+# Calculate the quantiles for long and short positions
+long_quantile <- quantile(merged_data$excess_return, 1 - x_percentile)
+short_quantile <- quantile(merged_data$excess_return, y_percentile)
+
+# Create a column to indicate if a stock is in long or short position
+merged_data <- merged_data %>%
+  mutate(
+    position = case_when(
+      excess_return >= long_quantile ~ "Long",
+      excess_return <= short_quantile ~ "Short",
+      TRUE ~ "Neutral"
+    )
+  )
+
+# Calculate weighted returns for each stock based on position
+merged_data <- merged_data %>%
+  group_by(tradedate, position) %>%
+  mutate(weighted_return = ifelse(position == "Long", lag(weight) * return, -lag(weight) * return))
+
+merged_data <- na.omit(merged_data)
+
+# Sum the weighted returns to get the portfolio return for each day
+portfolio_returns <- merged_data %>%
+  group_by(tradedate) %>%
+  summarise(portfolio_return = sum(weighted_return))
+
+# Remove rows with missing values
+portfolio_returns <- na.omit(portfolio_returns)
+
+# Calculate strategy metrics
+strategy_annualized_mean_return <- mean(portfolio_returns$portfolio_return) * 252
+strategy_volatility <- (sd(portfolio_returns$portfolio_return) * sqrt(252))*100
+strategy_sharpe_ratio <- strategy_annualized_mean_return / strategy_volatility
+
+# Print the metrics
+cat("Strategy Metrics for Custom Strategy:\n")
+cat("Annualized Mean Return (%):", strategy_annualized_mean_return * 100, "\n")
+cat("Volatility (%):", strategy_volatility, "\n")
+cat("Sharpe Ratio:", strategy_sharpe_ratio, "\n")
+
+# Calculate the proportion of the portfolio to allocate to each strategy
+total_investment <- 1000000  # Total investment amount
+
+# Calculate the weights for long and short positions
+long_weights <- sum(merged_data$weighted_return[merged_data$position == "Long"]) / sum(merged_data$weighted_return)
+short_weights <- sum(merged_data$weighted_return[merged_data$position == "Short"]) / sum(merged_data$weighted_return)
+
+# Calculate the allocation based on weights
+initial_strategy_allocation <- total_investment * long_weights
+custom_strategy_allocation <- total_investment * short_weights
+cash_allocation <- total_investment - (initial_strategy_allocation + custom_strategy_allocation)  # Allocate remaining to cash
+
+# Print the allocation
+cat("Allocation for Initial Strategy ($):", initial_strategy_allocation, "\n")
+cat("Allocation for Custom Strategy ($):", custom_strategy_allocation, "\n")
+cat("Allocation for Cash ($):", cash_allocation, "\n")
+```
+

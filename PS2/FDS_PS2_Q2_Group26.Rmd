@@ -1,0 +1,143 @@
+---
+title: "FDS_PS2_Q2_Group26"
+author: "Group26"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r}
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(tseries)
+library(lmtest)
+library(xts)
+library(PerformanceAnalytics)
+```
+
+```{r}
+rm(list=ls())
+# (a)
+# Load the data
+data <- read.csv("projectB.csv")
+
+# Convert 'tradedate' to Date type for proper sorting
+data$tradedate <- as.Date(data$tradedate, format = "%m/%d/%Y")
+
+# Sort by 'tradedate' in ascending order
+data_sorted <- data %>%
+  arrange(tradedate)
+
+# Calculate the market index return for each date
+market_index <- data_sorted %>%
+  group_by(tradedate) %>%
+  summarise(market_index = mean(return, na.rm = TRUE))
+
+# Function to calculate the weights for each stock at the end of each period
+# for a given lag k
+calculate_weights <- function(data_sorted, market_index, k) {
+  # Calculate excess return for each stock and each date
+  merged_data <- merge(data_sorted, market_index, by = "tradedate")
+  merged_data <- merged_data %>%
+    mutate(excess_return = lag(return, k-1) - lag(market_index, k-1))
+  
+  # Calculate the weights for each stock at the end of each period
+  merged_data <- merged_data %>%
+    group_by(tradedate) %>%
+    mutate(weight = - excess_return / 690)
+  
+  return(merged_data)
+}
+
+# Initialize a data frame to store the results
+results_table <- data.frame(
+  k = numeric(),
+  annualized_mean_return = numeric(),
+  volatility = numeric(),
+  sharpe_ratio = numeric()
+)
+
+# Calculate the weights for each stock for different values of k
+for (k in 1:6) {
+  merged_data <- calculate_weights(data_sorted, market_index, k)
+  
+  # Calculate weighted returns for each stock on each day
+  merged_data <- merged_data %>%
+    group_by(id) %>%
+    mutate(weighted_return = lag(weight) * return)
+  
+  # Sum the weighted returns to get the portfolio return for each day
+  portfolio_returns <- merged_data %>%
+    group_by(tradedate) %>%
+    summarise(portfolio_return = sum(weighted_return))
+  
+  # Remove rows with missing values
+  portfolio_returns <- na.omit(portfolio_returns)
+  
+  # Calculate strategy metrics
+  strategy_annualized_mean_return <- 100*mean(portfolio_returns$portfolio_return) * 252
+  strategy_volatility <- 100*sd(portfolio_returns$portfolio_return) * sqrt(252)
+  strategy_sharpe_ratio <- strategy_annualized_mean_return / strategy_volatility
+  
+  # Append the results to the results table
+  results_table <- rbind(results_table, 
+                         data.frame(k = k,
+                                    annualized_mean_return = strategy_annualized_mean_return,
+                                    volatility = strategy_volatility,
+                                    sharpe_ratio = strategy_sharpe_ratio))
+}
+
+# Print the results table
+print("Strategy Metrics:")
+print(results_table)
+
+
+# (b)
+weights_list <- list()
+for (k in 1:6) {
+  weights_list[[k]] <- calculate_weights(data_sorted, market_index, k)
+}
+
+# Create an empty data frame to store the portfolio weights
+portfolio_weights <- data.frame()
+
+# Iterate over the weights list and add the weights to the data frame
+for (k in 1:6) {
+  # Create a temporary dataframe for the current lag k
+  temp_df <- data.frame(
+    pid = 922205047,
+    d = weights_list[[k]]$tradedate,
+    id = weights_list[[k]]$id,
+    k = k,
+    w = weights_list[[k]]$weight,
+    vid = 0
+  )
+  
+  # Append the temporary dataframe to portfolio_weights
+  portfolio_weights <- rbind(portfolio_weights, temp_df)
+}
+
+
+# Assuming 'portfolio_weights' is your dataframe
+portfolio_weights$w <- sprintf("%.6f", as.numeric(as.character(portfolio_weights$w)))
+
+# Remove any duplicate rows
+# Assuming 'portfolio_weights' is your dataframe
+portfolio_weights <- portfolio_weights %>%
+  mutate(
+    k = as.integer(k),
+    vid = as.integer(vid),
+    pid = as.integer(pid),
+    id = as.integer(id),
+    d = as.Date(d)
+  )
+
+head(portfolio_weights)
+
+# Write the portfolio weights to a flat file
+write.csv(portfolio_weights, "projectB_Q2.csv", row.names = FALSE)
+```
+
+
